@@ -1,67 +1,99 @@
-import { useMemo } from 'react';
+import { useState, useMemo } from 'react';
+import { ThemeProvider } from './context/ThemeContext';
+import { Header } from './components/Header';
+import { KPIGrid } from './components/KPICard';
+import { DataTable } from './components/DataTable';
 import {
-  Header,
-  StatsGrid,
-  DataTable,
-  AdSpendChart,
-  ConversionChart,
+  RevenueChart,
+  SpendChart,
+  OrdersChart,
   RoasChart,
-  PlatformChart
-} from './components';
+  SourcePieChart,
+  EfficiencyMetrics
+} from './components/Charts';
 import { Loading } from './components/Loading';
 import { Error } from './components/Error';
-import { useGoogleSheets, calculateStats, prepareChartData } from './hooks/useGoogleSheets';
+import {
+  useGoogleSheets,
+  filterData,
+  calculateKPIs,
+  groupByMonthAndSource,
+  getTotalsBySource
+} from './hooks/useGoogleSheets';
 import { getSheetConfig } from './utils/sheetConfig';
+import './index.css';
 
 /**
  * URL PARAMETERS
  * ==============
  *
- * This dashboard supports two ways to specify which Google Sheet to use:
+ * ?client=acme     → Load from clients.json config
+ * ?sheet=2PACX-... → Load directly by sheet ID
  *
- * 1. Client slug (configured in src/config/clients.json):
- *    ?client=acme
- *
- * 2. Direct sheet ID (from "Publish to web" URL):
- *    ?sheet=2PACX-1vXyz...
- *    ?sheet=2PACX-1vXyz...&gid=123  (for specific tab)
- *
- * If no parameters provided, shows demo data.
- *
- * ADDING NEW CLIENTS
- * ==================
- * Edit src/config/clients.json to add new client configurations.
- *
- * GOOGLE SHEET SETUP
- * ==================
- * 1. Create sheet with columns: Month, Meta Spend, Meta Conversion Value,
- *    Google Spend, Google Conversion Value
- * 2. File > Share > Publish to web > Select sheet > CSV format > Publish
- * 3. Copy the sheet ID from the published URL (the 2PACX-... part)
+ * GOOGLE SHEET FORMAT
+ * ===================
+ * Required columns: date, source, spend, revenue, orders
+ * - date: YYYY-MM-DD format
+ * - source: google, meta, or shopify
+ * - spend, revenue: numeric
+ * - orders: integer
  */
 
-
-function App() {
-  // Get sheet config from URL parameters
+function Dashboard() {
   const sheetConfig = useMemo(() => getSheetConfig(), []);
+  const { data: rawData, loading, error: fetchError, refetch } = useGoogleSheets(sheetConfig.url);
 
-  const { data: sheetData, loading, error: fetchError, refetch } = useGoogleSheets(sheetConfig.url);
+  const [filters, setFilters] = useState({
+    dateRange: '6',
+    customStart: '',
+    customEnd: '',
+    source: 'all',
+  });
 
-  // Determine what data to show
-  const data = sheetData.length > 0 ? sheetData : [];
+  // Filter data based on current filters
+  const filteredData = useMemo(() => {
+    return filterData(rawData, filters);
+  }, [rawData, filters]);
 
-  // Calculate stats and prepare chart data
-  const stats = calculateStats(data);
-  const chartData = prepareChartData(data);
+  // Calculate KPIs with comparison to previous period
+  const kpis = useMemo(() => {
+    // Get comparison period data
+    const comparisonFilters = { ...filters };
+    if (filters.dateRange !== 'custom') {
+      const months = parseInt(filters.dateRange) || 6;
+      const now = new Date();
+      const comparisonEnd = new Date(now.getFullYear(), now.getMonth() - months, 0);
+      const comparisonStart = new Date(now.getFullYear(), now.getMonth() - (months * 2), 1);
+      comparisonFilters.dateRange = 'custom';
+      comparisonFilters.customStart = `${comparisonStart.getFullYear()}-${String(comparisonStart.getMonth() + 1).padStart(2, '0')}`;
+      comparisonFilters.customEnd = `${comparisonEnd.getFullYear()}-${String(comparisonEnd.getMonth() + 1).padStart(2, '0')}`;
+    }
+    const comparisonData = filterData(rawData, comparisonFilters);
+    return calculateKPIs(filteredData, comparisonData);
+  }, [rawData, filteredData, filters]);
 
-  // Handle config errors (unknown client, etc.)
+  // Group data for charts
+  const chartData = useMemo(() => {
+    return groupByMonthAndSource(filteredData);
+  }, [filteredData]);
+
+  // Get totals by source for pie chart
+  const sourceTotals = useMemo(() => {
+    return getTotalsBySource(filteredData);
+  }, [filteredData]);
+
+  // Handle config errors
   if (sheetConfig.error) {
     return <Error message={sheetConfig.error} onRetry={() => window.location.reload()} />;
   }
 
   // Handle loading state
   if (sheetConfig.url && loading) {
-    return <Loading />;
+    return (
+      <div className="loading-overlay">
+        <div className="spinner" />
+      </div>
+    );
   }
 
   // Handle fetch errors
@@ -69,28 +101,61 @@ function App() {
     return <Error message={fetchError} onRetry={refetch} />;
   }
 
+  // Show message if no data
+  if (!sheetConfig.url) {
+    return (
+      <div className="container mx-auto px-4 py-6">
+        <div className="card rounded-lg shadow p-8 text-center">
+          
+          <h2 className="text-xl font-semibold mb-4">No Data Source Configured</h2>
+          <p className="mb-4">Add <code className="bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded">?client=name</code> or <code className="bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded">?sheet=ID</code> to the URL to load data.</p>
+          <p className="text-sm opacity-70">Configure clients in <code>src/config/clients.json</code></p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="container">
+    <div className="container mx-auto px-4 py-6">
       <Header
-        title={sheetConfig.clientName ? `${sheetConfig.clientName} - Ad Performance` : '2025 Ad Spend + Conversion Value'}
-        subtitle="Year-to-date performance across Meta and Google platforms"
+        filters={filters}
+        onFilterChange={setFilters}
+        clientName={sheetConfig.clientName}
       />
 
+      <KPIGrid kpis={kpis} />
 
-      <StatsGrid stats={stats} />
-
-      <div className="chart-grid">
-        <AdSpendChart chartData={chartData} />
-        <ConversionChart chartData={chartData} />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        <RevenueChart chartData={chartData} />
+        <SpendChart chartData={chartData} />
       </div>
 
-      <div className="chart-grid">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        <OrdersChart chartData={chartData} />
         <RoasChart chartData={chartData} />
-        <PlatformChart chartData={chartData} />
       </div>
 
-      <DataTable data={data} />
+      <DataTable data={filteredData} />
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+        <SourcePieChart totals={sourceTotals} />
+        <div className="card rounded-lg shadow p-4">
+          <h2 className="text-lg font-semibold mb-4">Monthly Trends</h2>
+          <div className="chart-container flex items-center justify-center text-gray-400">
+            <p>Revenue vs Spend trends</p>
+          </div>
+        </div>
+        <EfficiencyMetrics kpis={kpis} />
+      </div>
     </div>
+  );
+}
+
+function App() {
+  return (
+    <ThemeProvider>
+      <Dashboard />
+    </ThemeProvider>
   );
 }
 
