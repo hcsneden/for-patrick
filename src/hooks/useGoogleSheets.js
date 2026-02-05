@@ -2,6 +2,18 @@ import { useState, useEffect, useCallback } from 'react';
 import Papa from 'papaparse';
 
 /**
+ * Parse a currency string like "$4,321.40" to a number
+ */
+function parseCurrency(value) {
+  if (value === null || value === undefined || value === '') return 0;
+  if (typeof value === 'number') return value;
+  // Remove $, commas, and whitespace, then parse
+  const cleaned = String(value).replace(/[$,\s]/g, '');
+  const parsed = parseFloat(cleaned);
+  return isNaN(parsed) ? 0 : parsed;
+}
+
+/**
  * Custom hook to fetch data from a published Google Sheet
  *
  * To use this hook:
@@ -49,10 +61,10 @@ export function useGoogleSheets(csvUrl) {
           // Transform the data to match expected format
           const transformedData = results.data.map(row => ({
             month: row.Month || row.month,
-            metaSpend: parseFloat(row['Meta Spend'] || row.metaSpend || 0),
-            metaConv: parseFloat(row['Meta Conversion Value'] || row['Meta Conv'] || row.metaConv || 0),
-            googleSpend: parseFloat(row['Google Spend'] || row.googleSpend || 0),
-            googleConv: parseFloat(row['Google Conversion Value'] || row['Google Conv'] || row.googleConv || 0),
+            metaSpend: parseCurrency(row['Meta Spend'] || row.metaSpend),
+            metaConv: parseCurrency(row['Meta Conversion Value'] || row['Meta Conv'] || row.metaConv),
+            googleSpend: parseCurrency(row['Google Spend'] || row.googleSpend),
+            googleConv: parseCurrency(row['Google Conversion Value'] || row['Google Conv'] || row.googleConv),
           })).filter(row => row.month); // Filter out rows without a month
 
           setData(transformedData);
